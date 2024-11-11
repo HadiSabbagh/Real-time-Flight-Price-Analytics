@@ -1,24 +1,10 @@
 from utils import start_spark_session
 from pyspark.sql.functions import from_json, col
 from pyspark.sql.types import StructType, StructField, StringType, FloatType, IntegerType
-import sqlite3
-from typing import Union
-from fastapi import FastAPI
-import httpx
-import asyncio
-from contextlib import asynccontextmanager
-import logging
-
-
-def write_to_sqlite(batch_df, batch_id):
-    batch_df.write \
-        .format("jdbc") \
-        .option("url", "jdbc:sqlite:flights_db.db") \
-        .option("checkpointLocation", "./checkpoints") \
-        .option("dbtable", "flights_test") \
-        .mode("append") \
-        .save()
-
+import json
+from pyspark.ml import PipelineModel
+from pyspark.ml.evaluation import RegressionEvaluator
+from pyspark.ml.regression import RandomForestRegressionModel
 
 schema = StructType([
     StructField("id", IntegerType()),
@@ -36,6 +22,8 @@ schema = StructType([
 
 
 ])
+
+
 def consume():
     spark = start_spark_session("consumer_session")
     test_data = spark.readStream \
@@ -49,42 +37,49 @@ def consume():
 
     test_data = test_data.select("parsed_value.*")
 
-    con = sqlite3.connect('flights_db.db')
-    cur = con.cursor()
-    limits = httpx.Limits(keepalive_expiry=None)
-    with httpx.Client(limits=limits) as client:
+    writing_sink = test_data.writeStream \
+        .foreachBatch(lambda batch_df, batch_id: test_model(batch_df, batch_id, spark)) \
+        .outputMode("append") \
+        .start()
 
-        async def process_batch(batch_df, batch_id):
-
-            json_data = batch_df.toJSON().collect()
-            # print(json_data)
-            response = client.post(
-                "http://127.0.0.1:8000/test_model", json=json_data, timeout=None)
-            print(
-                f"Response from model_api for batch {batch_id}: {response.status_code}, {response.text}")
-
-        writing_sink = test_data.writeStream \
-            .foreachBatch(lambda batch_df, batch_id: asyncio.run(process_batch(batch_df, batch_id))) \
-            .outputMode("append") \
-            .start()
-        writing_sink = test_data.writeStream \
-            .foreachBatch(write_to_sqlite) \
-            .outputMode("append") \
-            .start()
-
-        writing_sink.awaitTermination()
-    con.commit()
-    cur.close()
-    con.close()
-    spark.stop()
+    writing_sink.awaitTermination()
 
 
+def test_model(test_data, batch_id, spark):
+    test_data = test_data.toJSON().collect()
+    try:
+        fitted_pipeline_model = PipelineModel.load(
+            "./docs/pipeline_model_backup")
+        random_forest_model = RandomForestRegressionModel.load(
+            "./docs/random_forest_model")
 
-@asynccontextmanager
-async def start_consumer(app: FastAPI):
+        parsed_data = [json.loads(record) for record in test_data]
+        df = spark.createDataFrame(parsed_data)
+
+        prepared_data = fitted_pipeline_model.transform(
+            df).select("features", "price")
+
+        predictions = random_forest_model.transform(prepared_data)
+
+        r2_evaluator = RegressionEvaluator(
+            labelCol="price", predictionCol="prediction", metricName="r2")
+        rmse_evaluator = RegressionEvaluator(
+            labelCol="price", predictionCol="prediction", metricName="rmse")
+        mae_evaluator = RegressionEvaluator(
+            labelCol="price", predictionCol="prediction", metricName="mae")
+
+        r2 = r2_evaluator.evaluate(predictions)
+        rmse = rmse_evaluator.evaluate(predictions)
+        mae = mae_evaluator.evaluate(predictions)
+
+        print("R²:", r2)
+        print("RMSE:", rmse)
+        print("MAE:", mae)
+        predictions.select("prediction", "price").show()
+        return "Successfully processed batch"
+    except:
+        return "Batch could not be processed"
+
+
+if __name__ == "__main__":
     consume()
-    yield
-
-app = FastAPI(title="consumer_api", lifespan=start_consumer)
-
-

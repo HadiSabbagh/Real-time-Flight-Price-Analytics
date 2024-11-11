@@ -1,13 +1,13 @@
 from utils import start_spark_session
-from pyspark.sql.types import DoubleType
 from preprocess_class import pre_process
 from utils import read_data
 from pyspark.ml.regression import RandomForestRegressor
 
 def train_model():
+    
     spark = start_spark_session("train_model")
     train_data = read_data(spark,"./docs/train.csv")
-    # train_data = train_data.withColumn("price", train_data["price"].cast(DoubleType()))
+    
     pre_processor = pre_process(train_data)
     pipeline_model = pre_processor.get_pipeline_model()
     prepared_data = pipeline_model.transform(train_data)

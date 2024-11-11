@@ -74,7 +74,3 @@ class pre_process:
         except:
             print("Error Saving Pipeline Model")
 
-    # Assemble vectorized features (categorical and numerical)
-    def get_final_assembler(self):
-
-        self.final_assembler = final_assembler
