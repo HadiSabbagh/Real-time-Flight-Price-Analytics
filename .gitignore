@@ -1,9 +1,7 @@
 commands.txt
 run_all.bat
-/docs/Clean_Dataset.csv.zip
 /docs/pipeline_model_backup
 /docs/random_forest_model
-/docs/Clean_Dataset.csv
 __pycache__
 db_ml.ipynb
 flights_db.db
